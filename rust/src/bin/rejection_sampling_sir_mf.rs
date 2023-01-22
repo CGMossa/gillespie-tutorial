@@ -53,52 +53,53 @@ fn rejection_sampling_SIR_MF(
 ) -> Vec<State> {
     let State {
         tick: T,
-        susceptible: S0,
-        infected: I0,
-        recovered: R0,
+        susceptible: initial_susceptible,
+        infected: initial_infected,
+        recovered: initial_recovered,
     } = initial_state;
-    let mut S = S0;
-    let mut I = I0;
-    let mut R = R0;
-    // #--- Vector to save temporal evolution over time: ---
-    // X_t = []
-    // X_t.append([0., S, I, R])
-    let mut X_t: Vec<_> = Vec::new();
-    X_t.push(State::new(0., S, I, R));
-    let total_ticks = T as f64 / dt;
+    let mut susceptible = initial_susceptible;
+    let mut infected = initial_infected;
+    let mut recovered = initial_recovered;
+    let total_ticks: f64 = T as f64 / dt;
+    let T = total_ticks * dt;
     let total_ticks: usize = total_ticks as _;
+
+    // --- Vector to save temporal evolution over time: ---
+    let mut X_t: Vec<_> = Vec::with_capacity(total_ticks);
+    X_t.push(State::new(0., susceptible, infected, recovered));
 
     let mut uniform_sampler = rng.sample_iter(rand::distributions::Open01);
     for i in 0..total_ticks {
-        // #--- Infection and recovery probabilites in single time step: ---
-        let p_inf = (S * I) as f64 * beta_k * dt;
-        let p_rec = I as f64 * mu * dt;
+        // --- Infection and recovery probabilites in single time step: ---
+        let p_inf = (susceptible * infected) as f64 * beta_k * dt;
+        let p_rec = infected as f64 * mu * dt;
 
-        // # Check if transition probabilities sum to zero (no more reactions can happen):
-        // if np.isclose(p_inf + p_rec, 0.):
-        // # Save final state and break loop:
-        // X_t.append([T, S, I, R])
-        // break
+        // Check if transition probabilities sum to zero (no more reactions can happen):
+        // Save final state and break loop:
         if (p_inf + p_rec).abs() <= 1e-5 {
-            X_t.push(State::new(T as _, S, I, R));
+            X_t.push(State::new(T as _, susceptible, infected, recovered));
         }
-        // #--- Rejection sampling step: ---
-        // # Draw two uniform random variates (for each possible reaction):
-        // u1, u2 = rg.random(2)
+        // --- Rejection sampling step: ---
+        // Draw two uniform random variates (for each possible reaction):
         let u1: f64 = uniform_sampler.next().unwrap();
         let u2: f64 = uniform_sampler.next().unwrap();
-        // # Check if an S->I reaction takes place:
+        // Check if an S->I reaction takes place:
         if u1 < p_inf {
-            S -= 1;
-            I += 1;
+            susceptible -= 1;
+            infected += 1;
         }
-        // # Check if an I->R reaction takes place:
+        // Check if an I->R reaction takes place:
         if u2 < p_rec {
-            I -= 1;
-            R += 1;
+            infected -= 1;
+            recovered += 1;
         }
-        // #--- Save current state to X_t: ---
-        X_t.push(State::new((i + 1) as f64 * dt, S, I, R));
+        // --- Save current state to X_t: ---
+        X_t.push(State::new(
+            (i + 1) as f64 * dt,
+            susceptible,
+            infected,
+            recovered,
+        ));
     }
 
     X_t
@@ -124,15 +125,23 @@ fn main() -> color_eyre::Result<()> {
     let initial_recovered = 0; //# Number of recovered nodes at start of simulation
     let initial_susceptible = total_population - initial_infected - initial_recovered; //# Set number of susceptible nodes from N = S + I + R
 
-    // X_array = []
-    // for q in range(number_of_simulations):
-    // X_array.append(rejection_sampling_SIR_MF(beta_k, mu, dt, T, S0, I0, R0))
     let mut rng = rand::thread_rng();
     let simulations: BTreeMap<_, Vec<_>> = (0..number_of_simulations)
         .map(|repetition| {
             (
                 repetition + 1,
-                rejection_sampling_SIR_MF(beta_k, mu, dt, State::new(end_time, initial_susceptible, initial_infected, initial_recovered), &mut rng),
+                rejection_sampling_SIR_MF(
+                    beta_k,
+                    mu,
+                    dt,
+                    State::new(
+                        end_time,
+                        initial_susceptible,
+                        initial_infected,
+                        initial_recovered,
+                    ),
+                    &mut rng,
+                ),
             )
         })
         .collect();
