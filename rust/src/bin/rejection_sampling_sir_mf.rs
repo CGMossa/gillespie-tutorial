@@ -1,16 +1,33 @@
-use std::{fs, io::Write};
+//! Invariants to uphold:
+//!
+//! - Compartments must not go below zero.
+//! - End simulation with transition probabilities are effectively zero.
+//!
+use std::{collections::BTreeMap, fs, io::Write};
 
+use derive_new::new;
+#[allow(unused_imports)]
 use itertools::Itertools;
-use rand::Rng;
+#[allow(unused_imports)]
+use rand::prelude::*;
+#[allow(unused_imports)]
 use serde::Serialize;
+#[allow(unused_imports)]
+use tabled::Tabled;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, new, Tabled)]
 struct State {
     tick: f64,
     susceptible: usize,
     infected: usize,
     recovered: usize,
 }
+
+// #[derive(Debug, Serialize, new, Tabled)]
+// struct RepetitionState {
+//     repetition: std::num::NonZeroUsize,
+//     state: State,
+// }
 
 /// Simulates the mean field SIR process using rejection sampling.
 ///
@@ -26,16 +43,20 @@ struct State {
 /// --- Output: ---
 /// X_t : numpy array of numbers of susceptible, infectious, and recovered individuals at discrete points in time,
 ///       X_t[n] = [n * dt, S, I, R]
+#[allow(non_snake_case)]
 fn rejection_sampling_SIR_MF(
     beta_k: f64,
     mu: f64,
     dt: f64,
-    T: f64,
-    S0: usize,
-    I0: usize,
-    R0: usize,
+    initial_state: State,
     rng: &mut impl Rng,
-) -> Vec<(f64, usize, usize, usize)> {
+) -> Vec<State> {
+    let State {
+        tick: T,
+        susceptible: S0,
+        infected: I0,
+        recovered: R0,
+    } = initial_state;
     let mut S = S0;
     let mut I = I0;
     let mut R = R0;
@@ -43,7 +64,7 @@ fn rejection_sampling_SIR_MF(
     // X_t = []
     // X_t.append([0., S, I, R])
     let mut X_t: Vec<_> = Vec::new();
-    X_t.push((0., S, I, R));
+    X_t.push(State::new(0., S, I, R));
     let total_ticks = T as f64 / dt;
     let total_ticks: usize = total_ticks as _;
 
@@ -59,7 +80,7 @@ fn rejection_sampling_SIR_MF(
         // X_t.append([T, S, I, R])
         // break
         if (p_inf + p_rec).abs() <= 1e-5 {
-            X_t.push((T as _, S, I, R));
+            X_t.push(State::new(T as _, S, I, R));
         }
         // #--- Rejection sampling step: ---
         // # Draw two uniform random variates (for each possible reaction):
@@ -77,8 +98,7 @@ fn rejection_sampling_SIR_MF(
             R += 1;
         }
         // #--- Save current state to X_t: ---
-        // X_t.append([(i + 1) * dt, S, I, R])
-        X_t.push(((i + 1) as f64 * dt, S, I, R));
+        X_t.push(State::new((i + 1) as f64 * dt, S, I, R));
     }
 
     X_t
@@ -89,61 +109,53 @@ fn main() -> color_eyre::Result<()> {
     let beta = 0.1; // Infection rate
     let mu = 0.03; // Recovery rate
     let k = 5; // Mean degree
-    let N = 100; // Number of nodes
-    let T: f64 = 100.; // Simulation duration
+    let total_population = 100; // Number of nodes
+    let end_time: f64 = 100.; // Simulation duration
     let dt = 0.01; // Time step length
 
     // # Effective mean field infection rate:
-    let beta_k = beta * (k as f64) / N as f64;
+    let beta_k = beta * (k as f64) / total_population as f64;
 
     // # Number of independent runs of the simulation:
     let number_of_simulations = 10;
 
     // #--- Initial state: ---
-    let I0 = 1; //# Number of infected (seed) nodes at start of simulation
-    let R0 = 0; //# Number of recovered nodes at start of simulation
-    let S0 = N - I0 - R0; //# Set number of susceptible nodes from N = S + I + R
+    let initial_infected = 1; //# Number of infected (seed) nodes at start of simulation
+    let initial_recovered = 0; //# Number of recovered nodes at start of simulation
+    let initial_susceptible = total_population - initial_infected - initial_recovered; //# Set number of susceptible nodes from N = S + I + R
 
     // X_array = []
     // for q in range(number_of_simulations):
     // X_array.append(rejection_sampling_SIR_MF(beta_k, mu, dt, T, S0, I0, R0))
     let mut rng = rand::thread_rng();
-    let simulations = (0..number_of_simulations)
-        .map(|_| rejection_sampling_SIR_MF(beta_k, mu, dt, T, S0, I0, R0, &mut rng))
-        .collect_vec();
+    let simulations: BTreeMap<_, Vec<_>> = (0..number_of_simulations)
+        .map(|repetition| {
+            (
+                repetition + 1,
+                rejection_sampling_SIR_MF(beta_k, mu, dt, State::new(end_time, initial_susceptible, initial_infected, initial_recovered), &mut rng),
+            )
+        })
+        .collect();
 
     fs::create_dir_all("output/")?;
-    let writer = fs::OpenOptions::new()
+    let mut writer = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .append(false)
         .open("output/rejection_sampling_sir_mf.json")?;
-    serde_json::to_writer_pretty(writer, &simulations)?;
+    serde_json::to_writer_pretty(&mut writer, &simulations)?;
+    writer.flush()?;
 
-    let mut table = tabled::builder::Builder::default();
-    table.hint_column_size(3 + 1 + 1);
-    table.set_columns(["Iteration", "Time", "S", "I", "R"]);
-    simulations.iter().enumerate().for_each(|(repetition, x)| {
-        let repetition = repetition + 1;
-        for (tick, sus, infect, recov) in x.iter() {
-            table.add_record([
-                repetition.to_string(),
-                tick.to_string(),
-                sus.to_string(),
-                infect.to_string(),
-                recov.to_string(),
-            ]);
-        }
-    });
-    let mut table = table.build();
-    table.with(tabled::Style::modern());
+    // let mut table = Table::new(simulations);
+    // table.with(tabled::Style::modern());
 
-    fs::OpenOptions::new()
-        .create(true)
-        .append(false)
-        .write(true)
-        .open("output/rejection_sampling_sir_table.txt")?
-        .write_fmt(format_args!("{table:}"))?;
+    // fs::OpenOptions::new()
+    //     .create(true)
+    //     .append(false)
+    //     .write(true)
+    //     .open("output/rejection_sampling_sir_table.txt")?
+    //     .write_fmt(format_args!("{table:}"))?;
+    // writer.flush();
 
     Ok(())
 }
