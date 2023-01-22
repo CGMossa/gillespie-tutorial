@@ -3,7 +3,7 @@
 //! - Compartments must not go below zero.
 //! - End simulation with transition probabilities are effectively zero.
 //!
-use std::{collections::BTreeMap, fs, io::Write};
+use std::{collections::BTreeMap, fs, io::{Write, BufWriter}};
 
 use derive_new::new;
 #[allow(unused_imports)]
@@ -78,6 +78,7 @@ fn rejection_sampling_SIR_MF(
         // Save final state and break loop:
         if (p_inf + p_rec).abs() <= 1e-5 {
             X_t.push(State::new(T as _, susceptible, infected, recovered));
+            X_t.shrink_to_fit();
         }
         // --- Rejection sampling step: ---
         // Draw two uniform random variates (for each possible reaction):
@@ -152,6 +153,7 @@ fn main() -> color_eyre::Result<()> {
         .write(true)
         .append(false)
         .open("output/rejection_sampling_sir_mf.json")?;
+    let mut writer = BufWriter::with_capacity(100_000, writer);
     serde_json::to_writer_pretty(&mut writer, &simulations)?;
     writer.flush()?;
 
